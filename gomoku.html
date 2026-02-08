@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gomoku Pro</title>
+<style>
+:root {
+  --bg-color: #f0f2f5;
+  --panel-bg: #ffffff;
+  --primary: #2563eb;
+  --primary-hover: #1d4ed8;
+  --text: #1f2937;
+  --border: #e5e7eb;
+  --blue-piece: #2563eb;
+  --red-piece: #ef4444;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background-color: var(--bg-color);
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin: 0;
+  padding: 20px;
+}
+
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-width: 100%;
+}
+
+.controls {
+  background: var(--panel-bg);
+  padding: 20px;
+  border-radius: 12px;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 15px;
+  width: 100%;
+}
+
+.control-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+label {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #4b5563;
+}
+
+input, select {
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 1rem;
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+  grid-column: 1 / -1;
+}
+
+button {
+  flex: 1;
+  padding: 10px;
+  background-color: var(--primary);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+button:hover {
+  background-color: var(--primary-hover);
+}
+
+button.secondary {
+  background-color: #6b7280;
+}
+
+button.secondary:hover {
+  background-color: #4b5563;
+}
+
+.status-area {
+  text-align: center;
+  padding: 10px;
+  background: var(--panel-bg);
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  min-height: 24px;
+}
+
+#status-text {
+  font-weight: bold;
+  font-size: 1.1rem;
+}
+
+#thinking-indicator {
+  color: #9333ea;
+  font-style: italic;
+  display: none;
+}
+
+.game-wrapper {
+  position: relative;
+  background: #dbb07d;
+  padding: 20px;
+  border-radius: 4px;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.2);
+  overflow: auto;
+  max-width: 95vw;
+}
+
+canvas {
+  cursor: crosshair;
+  display: block;
+}
+</style>
+</head>
+<body>
+
+<div class="container">
+  <div class="controls">
+    <div class="control-group">
+      <label>Rows (M)</label>
+      <input type="number" id="rows" value="15" min="5" max="30">
+    </div>
+    <div class="control-group">
+      <label>Cols (N)</label>
+      <input type="number" id="cols" value="15" min="5" max="30">
+    </div>
+    <div class="control-group">
+      <label>Game Mode</label>
+      <select id="mode">
+        <option value="pvp">Human vs Human</option>
+        <option value="pve">Human vs AI</option>
+      </select>
+    </div>
+    <div id="ai-settings" class="control-group" style="display: none;">
+      <label>AI Difficulty</label>
+      <select id="difficulty">
+        <option value="1">Level 1 (Easy)</option>
+        <option value="2">Level 2 (Medium)</option>
+        <option value="3" selected>Level 3 (Hard)</option>
+      </select>
+      <label style="margin-top: 10px;">Play As</label>
+      <select id="human-color">
+        <option value="1">Blue (First)</option>
+        <option value="2">Red (Second)</option>
+      </select>
+    </div>
+    <div class="actions">
+      <button id="new-game">New Game</button>
+      <button id="restart" class="secondary">Restart</button>
+      <button id="undo" class="secondary">Undo</button>
+    </div>
+  </div>
+
+  <div class="status-area">
+    <span id="status-text">Blue's Turn</span>
+    <span id="thinking-indicator"> - AI thinking...</span>
+  </div>
+
+  <div class="game-wrapper">
+    <canvas id="gameBoard"></canvas>
+  </div>
+</div>
+
+<script>
+const EMPTY = 0;
+const PLAYER1 = 1; // Blue
+const PLAYER2 = 2; // Red
+
+class GomokuGame {
+  constructor(rows, cols) {
+    this.rows = rows;
+    this.cols = cols;
+    this.board = Array(rows * cols).fill(EMPTY);
+    this.turn = PLAYER1;
+    this.gameOver = false;
+    this.history = [];
+    this.lastMove = null;
+  }
+
+  get(r, c) {
+    if (r < 0 || r >= this.rows || c < 0 || c >= this.cols) return null;
+    return this.board[r * this.cols + c];
+  }
+
+  set(r, c, val) {
+    this.board[r * this.cols + c] = val;
+  }
+
+  wouldCreateRunInfo(r, c, player, dr, dc) {
+    if (this.get(r, c) !== EMPTY) return null;
+
+    let a = 0;
+    while (this.get(r + dr * (a + 1), c + dc * (a + 1)) === player) a++;
+
+    let b = 0;
+    while (this.get(r - dr * (b + 1), c - dc * (b + 1)) === player) b++;
+
+    const len = 1 + a + b;
+
+    const end1 = this.get(r + dr * (a + 1), c + dc * (a + 1));
+    const end2 = this.get(r - dr * (b + 1), c - dc * (b + 1));
+
+    const open1 = (end1 === EMPTY);
+    const open2 = (end2 === EMPTY);
+
+    return { len, open: (open1 ? 1 : 0) + (open2 ? 1 : 0) };
+  }
+
+  wouldCreateOpenFour(r, c, player) {
+    const dirs = [[1,0],[0,1],[1,1],[1,-1]];
+    for (const [dr, dc] of dirs) {
+      const info = this.wouldCreateRunInfo(r, c, player, dr, dc);
+      if (info && info.len === 4 && info.open === 2) return true;
+    }
+    return false;
+  }
+
+  wouldCreateFour(r, c, player) {
+    const dirs = [[1,0],[0,1],[1,1],[1,-1]];
+    for (const [dr, dc] of dirs) {
+      const info = this.wouldCreateRunInfo(r, c, player, dr, dc);
+      if (info && info.len === 4 && info.open >= 1) return true;
+    }
+    return false;
+  }
+
+  wouldCreateLiveThree(r, c, player) {
+    const dirs = [[1,0],[0,1],[1,1],[1,-1]];
+    for (const [dr, dc] of dirs) {
+      const info = this.wouldCreateRunInfo(r, c, player, dr, dc);
+      if (info && info.len === 3 && info.open === 2) return true;
+    }
+    return false;
+  }
+
+  makeMove(r, c) {
+    if (this.gameOver || this.get(r, c) !== EMPTY) return false;
+
+    this.set(r, c, this.turn);
+    this.lastMove = { r, c };
+    this.history.push({ r, c, player: this.turn });
+
+    if (this.checkWin(r, c, this.turn)) {
+      this.gameOver = true;
+      return true;
+    }
+
+    if (this.history.length === this.rows * this.cols) {
+      this.gameOver = true;
+      this.turn = null; // Draw
+      return true;
+    }
+
+    this.turn = this.turn === PLAYER1 ? PLAYER2 : PLAYER1;
+    return true;
+  }
+
+  undo() {
+    if (this.history.length === 0) return null;
+    const last = this.history.pop();
+    this.set(last.r, last.c, EMPTY);
+    this.turn = last.player;
+    this.gameOver = false;
+    this.lastMove = this.history.length > 0 ? this.history[this.history.length - 1] : null;
+    return last;
+  }
+
+  wouldWin(r, c, player) {
+    if (this.get(r, c) !== EMPTY) return false;
+    this.set(r, c, player);
+    const won = this.checkWin(r, c, player);
+    this.set(r, c, EMPTY);
+    return won;
+  }
+
+  checkWin(r, c, player) {
+    const dirs = [[1, 0], [0, 1], [1, 1], [1, -1]];
+    for (let [dr, dc] of dirs) {
+      let count = 1;
+
+      for (let i = 1; i < 5; i++) {
+        if (this.get(r + dr * i, c + dc * i) === player) count++;
+        else break;
+      }
+
+      for (let i = 1; i < 5; i++) {
+        if (this.get(r - dr * i, c - dc * i) === player) count++;
+        else break;
+      }
+
+      if (count >= 5) return true;
+    }
+    return false;
+  }
+}
+
+class GomokuAI {
+  constructor(game) {
+    this.game = game;
+    this.scores = {
+      WIN: 10000000,
+      OPEN_FOUR: 2000000,     // "free 4" (both ends open) => basically forced win
+      FOUR: 200000,           // 4 with >=1 open end
+      LIVE_THREE: 40000,      // strong threat
+      THREE: 4000,
+      LIVE_TWO: 300,
+      TWO: 40
+    };
+  }
+
+  getBestMove(difficulty) {
+    if (difficulty == 1) return this.randomPlusMove();
+
+    const me = this.game.turn;
+    const opp = me === PLAYER1 ? PLAYER2 : PLAYER1;
+
+    let candidates = this.getCandidates();
+
+    // 1) Win now
+    for (const m of candidates) {
+      if (this.game.wouldWin(m.r, m.c, me)) return m;
+    }
+
+    // 2) Block opponent win now
+    for (const m of candidates) {
+      if (this.game.wouldWin(m.r, m.c, opp)) return m;
+    }
+
+    // 3) Create open-four now (forced win)
+    for (const m of candidates) {
+      if (this.game.wouldCreateOpenFour(m.r, m.c, me)) return m;
+    }
+
+    // 4) Block opponent open-four creation now
+    for (const m of candidates) {
+      if (this.game.wouldCreateOpenFour(m.r, m.c, opp)) return m;
+    }
+
+    // 5) Create four (one-end open) now
+    for (const m of candidates) {
+      if (this.game.wouldCreateFour(m.r, m.c, me)) return m;
+    }
+
+    // 6) Block opponent four creation now
+    for (const m of candidates) {
+      if (this.game.wouldCreateFour(m.r, m.c, opp)) return m;
+    }
+
+    // Difficulty tuning: deeper + more candidates for hard
+    const depth = (difficulty == 2) ? 2 : 4;
+
+    if (difficulty == 3) {
+      candidates.forEach(m => {
+        m.score = this.evalMoveTactical(m.r, m.c, me);
+      });
+      candidates.sort((a, b) => b.score - a.score);
+      candidates.splice(18);
+    }
+
+    let bestVal = -Infinity;
+    let bestMove = candidates[0];
+    let alpha = -Infinity;
+    let beta = Infinity;
+
+    for (const move of candidates) {
+      this.game.set(move.r, move.c, me);
+
+      // Tactical sanity: if after my move opponent can win/open-four, punish heavily
+      const punish = this.immediateDangerPenalty(opp);
+
+      let val;
+      if (punish < 0) {
+        val = punish;
+      } else {
+        val = -this.minimax(depth - 1, -beta, -alpha, opp);
+      }
+
+      this.game.set(move.r, move.c, EMPTY);
+
+      if (val > bestVal) {
+        bestVal = val;
+        bestMove = move;
+      }
+      alpha = Math.max(alpha, val);
+    }
+
+    return bestMove;
+  }
+
+  immediateDangerPenalty(playerToMove) {
+    const candidates = this.getCandidates();
+    // if playerToMove can win immediately -> huge negative for side who just played
+    for (const m of candidates) {
+      if (this.game.wouldWin(m.r, m.c, playerToMove)) return -this.scores.WIN;
+    }
+    // if playerToMove can create an open four -> also basically losing
+    for (const m of candidates) {
+      if (this.game.wouldCreateOpenFour(m.r, m.c, playerToMove)) return -this.scores.OPEN_FOUR;
+    }
+    return 0;
+  }
+
+  minimax(depth, alpha, beta, player) {
+    const me = player;
+    const opp = me === PLAYER1 ? PLAYER2 : PLAYER1;
+
+    // Terminal-ish tactical checks
+    const cand = this.getCandidates();
+
+    for (const m of cand) {
+      if (this.game.wouldWin(m.r, m.c, me)) return this.scores.WIN + depth;
+    }
+    for (const m of cand) {
+      if (this.game.wouldCreateOpenFour(m.r, m.c, me)) return this.scores.OPEN_FOUR + depth;
+    }
+
+    if (depth === 0) return this.evaluateBoard(player);
+
+    // Sort for better pruning
+    cand.forEach(m => m.score = this.evalMoveTactical(m.r, m.c, me));
+    cand.sort((a, b) => b.score - a.score);
+
+    let maxEval = -Infinity;
+
+    for (let i = 0; i < Math.min(cand.length, 10); i++) {
+      const m = cand[i];
+
+      this.game.set(m.r, m.c, me);
+
+      // If this move allows immediate loss, avoid it
+      const punish = this.immediateDangerPenalty(opp);
+      let evalVal;
+      if (punish < 0) {
+        evalVal = punish;
+      } else {
+        evalVal = -this.minimax(depth - 1, -beta, -alpha, opp);
+      }
+
+      this.game.set(m.r, m.c, EMPTY);
+
+      maxEval = Math.max(maxEval, evalVal);
+      alpha = Math.max(alpha, evalVal);
+      if (beta <= alpha) break;
+    }
+
+    return maxEval;
+  }
+
+  evaluateBoard(povPlayer) {
+    const opp = povPlayer === PLAYER1 ? PLAYER2 : PLAYER1;
+    const s1 = this.scoreForPlayer(povPlayer);
+    const s2 = this.scoreForPlayer(opp);
+    return s1 - s2 * 1.15;
+  }
+
+  scoreForPlayer(player) {
+    let score = 0;
+    const rows = this.game.rows;
+    const cols = this.game.cols;
+    const dirs = [[1,0],[0,1],[1,1],[1,-1]];
+
+    // Evaluate every empty cell as a potential move (pattern-centric eval)
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        if (this.game.get(r, c) !== EMPTY) continue;
+
+        let bestHere = 0;
+
+        for (const [dr, dc] of dirs) {
+          const info = this.game.wouldCreateRunInfo(r, c, player, dr, dc);
+          if (!info) continue;
+
+          let v = 0;
+          if (info.len >= 5) v = this.scores.WIN;
+          else if (info.len === 4 && info.open === 2) v = this.scores.OPEN_FOUR;
+          else if (info.len === 4 && info.open >= 1) v = this.scores.FOUR;
+          else if (info.len === 3 && info.open === 2) v = this.scores.LIVE_THREE;
+          else if (info.len === 3 && info.open === 1) v = this.scores.THREE;
+          else if (info.len === 2 && info.open === 2) v = this.scores.LIVE_TWO;
+          else if (info.len === 2 && info.open === 1) v = this.scores.TWO;
+
+          if (v > bestHere) bestHere = v;
+        }
+
+        score += bestHere * 0.03; // keep it bounded
+      }
+    }
+
+    return score;
+  }
+
+  evalMoveTactical(r, c, me) {
+    const opp = me === PLAYER1 ? PLAYER2 : PLAYER1;
+
+    // Immediate tactical features for a move (no deep search)
+    let s = 0;
+
+    if (this.game.wouldWin(r, c, me)) s += this.scores.WIN;
+    if (this.game.wouldCreateOpenFour(r, c, me)) s += this.scores.OPEN_FOUR;
+    if (this.game.wouldCreateFour(r, c, me)) s += this.scores.FOUR;
+    if (this.game.wouldCreateLiveThree(r, c, me)) s += this.scores.LIVE_THREE;
+
+    // Blocking features are also valuable
+    if (this.game.wouldWin(r, c, opp)) s += this.scores.WIN * 0.9;
+    if (this.game.wouldCreateOpenFour(r, c, opp)) s += this.scores.OPEN_FOUR * 0.9;
+    if (this.game.wouldCreateFour(r, c, opp)) s += this.scores.FOUR * 0.7;
+    if (this.game.wouldCreateLiveThree(r, c, opp)) s += this.scores.LIVE_THREE * 0.6;
+
+    // Mild center bias
+    const cr = (this.game.rows - 1) / 2;
+    const cc = (this.game.cols - 1) / 2;
+    const dist = Math.abs(r - cr) + Math.abs(c - cc);
+    s += Math.max(0, 50 - dist);
+
+    return s;
+  }
+
+  getCandidates() {
+    const set = new Set();
+    const rows = this.game.rows;
+    const cols = this.game.cols;
+    let hasAny = false;
+
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        if (this.game.get(r, c) !== EMPTY) {
+          hasAny = true;
+          for (let i = -2; i <= 2; i++) {
+            for (let j = -2; j <= 2; j++) {
+              const nr = r + i, nc = c + j;
+              if (nr >= 0 && nr < rows && nc >= 0 && nc < cols && this.game.get(nr, nc) === EMPTY) {
+                set.add(nr * cols + nc);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if (!hasAny) return [{ r: Math.floor(rows / 2), c: Math.floor(cols / 2) }];
+
+    return Array.from(set).map(idx => ({
+      r: Math.floor(idx / cols),
+      c: idx % cols
+    }));
+  }
+
+  randomPlusMove() {
+    const me = this.game.turn;
+    const opp = me === PLAYER1 ? PLAYER2 : PLAYER1;
+    const candidates = this.getCandidates();
+
+    for (const m of candidates) if (this.game.wouldWin(m.r, m.c, me)) return m;
+    for (const m of candidates) if (this.game.wouldWin(m.r, m.c, opp)) return m;
+
+    for (const m of candidates) if (this.game.wouldCreateOpenFour(m.r, m.c, me)) return m;
+    for (const m of candidates) if (this.game.wouldCreateOpenFour(m.r, m.c, opp)) return m;
+
+    return candidates[Math.floor(Math.random() * candidates.length)];
+  }
+}
+
+const canvas = document.getElementById('gameBoard');
+const ctx = canvas.getContext('2d');
+const statusText = document.getElementById('status-text');
+const thinkingInd = document.getElementById('thinking-indicator');
+
+let game, ai, cellSize = 35, padding = 30;
+let mousePos = null;
+let aiBusy = false;
+
+function initGame() {
+  const r = parseInt(document.getElementById('rows').value, 10);
+  const c = parseInt(document.getElementById('cols').value, 10);
+
+  game = new GomokuGame(r, c);
+  ai = new GomokuAI(game);
+
+  canvas.width = c * cellSize + padding * 2;
+  canvas.height = r * cellSize + padding * 2;
+
+  mousePos = null;
+  aiBusy = false;
+
+  updateStatus();
+  render();
+
+  if (document.getElementById('mode').value === 'pve' &&
+      document.getElementById('human-color').value == PLAYER2) {
+    setTimeout(doAIMove, 500);
+  }
+}
+
+function render() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  ctx.strokeStyle = '#4b3621';
+  ctx.lineWidth = 1;
+
+  for (let i = 0; i < game.cols; i++) {
+    ctx.beginPath();
+    ctx.moveTo(padding + i * cellSize, padding);
+    ctx.lineTo(padding + i * cellSize, padding + (game.rows - 1) * cellSize);
+    ctx.stroke();
+  }
+
+  for (let i = 0; i < game.rows; i++) {
+    ctx.beginPath();
+    ctx.moveTo(padding, padding + i * cellSize);
+    ctx.lineTo(padding + (game.cols - 1) * cellSize, padding + i * cellSize);
+    ctx.stroke();
+  }
+
+  for (let r = 0; r < game.rows; r++) {
+    for (let c = 0; c < game.cols; c++) {
+      const p = game.get(r, c);
+      if (p !== EMPTY) drawPiece(r, c, p);
+    }
+  }
+
+  if (game.lastMove) {
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(padding + game.lastMove.c * cellSize, padding + game.lastMove.r * cellSize, 5, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  if (!game.gameOver && mousePos) {
+    const { r, c } = mousePos;
+    if (game.get(r, c) === EMPTY) {
+      ctx.globalAlpha = 0.4;
+      drawPiece(r, c, game.turn);
+      ctx.globalAlpha = 1.0;
+    }
+  }
+}
+
+function drawPiece(r, c, player) {
+  const x = padding + c * cellSize;
+  const y = padding + r * cellSize;
+  const grad = ctx.createRadialGradient(x - 5, y - 5, 2, x, y, cellSize / 2);
+
+  if (player === PLAYER1) {
+    grad.addColorStop(0, '#60a5fa');
+    grad.addColorStop(1, '#1e40af');
+  } else {
+    grad.addColorStop(0, '#f87171');
+    grad.addColorStop(1, '#991b1b');
+  }
+
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(x, y, cellSize / 2 - 2, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.shadowBlur = 4;
+  ctx.shadowColor = 'rgba(0,0,0,0.3)';
+
+  ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  ctx.shadowBlur = 0;
+}
+
+function updateStatus() {
+  if (game.gameOver) {
+    if (game.turn === null) statusText.innerText = "Draw!";
+    else statusText.innerText = (game.turn === PLAYER1 ? "Blue" : "Red") + " Wins!";
+  } else {
+    statusText.innerText = (game.turn === PLAYER1 ? "Blue" : "Red") + "'s Turn";
+  }
+}
+
+async function doAIMove() {
+  if (game.gameOver || aiBusy) return;
+  aiBusy = true;
+
+  thinkingInd.style.display = 'inline';
+
+  await new Promise(r => requestAnimationFrame(() => setTimeout(r, 50)));
+
+  const diff = parseInt(document.getElementById('difficulty').value, 10);
+  const move = ai.getBestMove(diff);
+
+  if (move) {
+    game.makeMove(move.r, move.c);
+  }
+
+  thinkingInd.style.display = 'none';
+  aiBusy = false;
+
+  updateStatus();
+  render();
+}
+
+canvas.addEventListener('mousemove', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const x = e.clientX - rect.left - padding;
+  const y = e.clientY - rect.top - padding;
+
+  const c = Math.round(x / cellSize);
+  const r = Math.round(y / cellSize);
+
+  if (r >= 0 && r < game.rows && c >= 0 && c < game.cols) {
+    mousePos = { r, c };
+  } else {
+    mousePos = null;
+  }
+
+  render();
+});
+
+canvas.addEventListener('click', () => {
+  if (!mousePos || game.gameOver || aiBusy) return;
+
+  const isPvE = document.getElementById('mode').value === 'pve';
+
+  if (game.makeMove(mousePos.r, mousePos.c)) {
+    render();
+    updateStatus();
+
+    if (isPvE && !game.gameOver) {
+      doAIMove();
+    }
+  }
+});
+
+document.getElementById('new-game').addEventListener('click', initGame);
+document.getElementById('restart').addEventListener('click', initGame);
+
+document.getElementById('undo').addEventListener('click', () => {
+  const isPvE = document.getElementById('mode').value === 'pve';
+
+  if (!game.undo()) return;
+  if (isPvE) game.undo();
+
+  updateStatus();
+  render();
+});
+
+document.getElementById('mode').addEventListener('change', (e) => {
+  document.getElementById('ai-settings').style.display = e.target.value === 'pve' ? 'block' : 'none';
+});
+
+initGame();
+</script>
+
+</body>
+</html>
